@@ -6,9 +6,20 @@
  */
 
 #import <React/RCTImageBlurUtils.h>
+#import <ImageIO/ImageIO.h>
 
 UIImage *RCTBlurredImageWithRadius(UIImage *inputImage, CGFloat radius)
 {
+  if (inputImage.images.count > 1) {
+    // If the input image is an animated GIF, process each frame individually
+    NSMutableArray<UIImage *> *blurredFrames = [NSMutableArray arrayWithCapacity:inputImage.images.count];
+    for (UIImage *frame in inputImage.images) {
+      UIImage *blurredFrame = RCTBlurredImageWithRadius(frame, radius);
+      [blurredFrames addObject:blurredFrame];
+    }
+    return [UIImage animatedImageWithImages:blurredFrames duration:inputImage.duration];
+  }
+
   CGImageRef imageRef = inputImage.CGImage;
   CGFloat imageScale = inputImage.scale;
   UIImageOrientation imageOrientation = inputImage.imageOrientation;
@@ -18,7 +29,7 @@ UIImage *RCTBlurredImageWithRadius(UIImage *inputImage, CGFloat radius)
     return inputImage;
   }
 
-  // convert to ARGB if it isn't
+  // Convert to ARGB if it isn't
   if (CGImageGetBitsPerPixel(imageRef) != 32 || !((CGImageGetBitmapInfo(imageRef) & kCGBitmapAlphaInfoMask))) {
     UIGraphicsImageRendererFormat *const rendererFormat = [UIGraphicsImageRendererFormat defaultFormat];
     rendererFormat.scale = inputImage.scale;
@@ -51,7 +62,7 @@ UIImage *RCTBlurredImageWithRadius(UIImage *inputImage, CGFloat radius)
   uint32_t boxSize = floor((radius * imageScale * 3 * sqrt(2 * M_PI) / 4 + 0.5) / 2);
   boxSize |= 1; // Ensure boxSize is odd
 
-  // create temp buffer
+  // Create temp buffer
   vImage_Error tempBufferSize = vImageBoxConvolve_ARGB8888(
       &buffer1, &buffer2, NULL, 0, 0, boxSize, boxSize, NULL, kvImageGetTempBufferSize | kvImageEdgeExtend);
   if (tempBufferSize <= 0) {
@@ -66,21 +77,21 @@ UIImage *RCTBlurredImageWithRadius(UIImage *inputImage, CGFloat radius)
     return inputImage;
   }
 
-  // copy image data
+  // Copy image data
   CFDataRef dataSource = CGDataProviderCopyData(CGImageGetDataProvider(imageRef));
   memcpy(buffer1.data, CFDataGetBytePtr(dataSource), bytes);
   CFRelease(dataSource);
 
-  // perform blur
+  // Perform blur
   vImageBoxConvolve_ARGB8888(&buffer1, &buffer2, tempBuffer, 0, 0, boxSize, boxSize, NULL, kvImageEdgeExtend);
   vImageBoxConvolve_ARGB8888(&buffer2, &buffer1, tempBuffer, 0, 0, boxSize, boxSize, NULL, kvImageEdgeExtend);
   vImageBoxConvolve_ARGB8888(&buffer1, &buffer2, tempBuffer, 0, 0, boxSize, boxSize, NULL, kvImageEdgeExtend);
 
-  // free buffers
+  // Free buffers
   free(buffer2.data);
   free(tempBuffer);
 
-  // create image context from buffer
+  // Create image context from buffer
   CGContextRef ctx = CGBitmapContextCreate(
       buffer1.data,
       buffer1.width,
@@ -90,7 +101,7 @@ UIImage *RCTBlurredImageWithRadius(UIImage *inputImage, CGFloat radius)
       CGImageGetColorSpace(imageRef),
       CGImageGetBitmapInfo(imageRef));
 
-  // create image from context
+  // Create image from context
   imageRef = CGBitmapContextCreateImage(ctx);
   UIImage *outputImage = [UIImage imageWithCGImage:imageRef scale:imageScale orientation:imageOrientation];
   CGImageRelease(imageRef);
@@ -98,3 +109,4 @@ UIImage *RCTBlurredImageWithRadius(UIImage *inputImage, CGFloat radius)
   free(buffer1.data);
   return outputImage;
 }
+

@@ -16,6 +16,8 @@
 #import <React/RCTUIImageViewAnimated.h>
 #import <React/RCTUtils.h>
 #import <React/UIView+React.h>
+#import <FLAnimatedImage/FLAnimatedImage.h>
+#import <SDWebImage/SDWebImage.h>
 
 /**
  * Determines whether an image of `currentSize` should be reloaded for display
@@ -55,6 +57,8 @@ static NSDictionary *onLoadParamsForSource(RCTImageSource *source)
 @property (nonatomic, copy) RCTDirectEventBlock onPartialLoad;
 @property (nonatomic, copy) RCTDirectEventBlock onLoad;
 @property (nonatomic, copy) RCTDirectEventBlock onLoadEnd;
+@property (nonatomic, assign) NSUInteger currentFrameIndex;
+@property (nonatomic, strong) NSTimer *animationTimer;
 
 @end
 
@@ -189,6 +193,41 @@ RCT_NOT_IMPLEMENTED(-(instancetype)initWithFrame : (CGRect)frame)
   if (![imageSources isEqual:_imageSources]) {
     _imageSources = [imageSources copy];
     _needsReload = YES;
+    self.currentFrameIndex = 0; 
+  }
+}
+
+- (void)setCurrentFrameIndex:(NSUInteger)currentFrameIndex
+{
+  if (currentFrameIndex != _currentFrameIndex) {
+    _currentFrameIndex = currentFrameIndex;
+
+    if (self.imageSources.count > 0) {
+      RCTImageSource *currentFrameSource = self.imageSources[currentFrameIndex];
+      [self loadAndDisplayImageFromSource:currentFrameSource];
+    }
+  }
+}
+
+- (void)startAnimation
+{
+  if (self.imageSources.count > 1) {
+    if (self.animationTimer) {
+      [self.animationTimer invalidate];
+    }
+    self.animationTimer = [NSTimer scheduledTimerWithTimeInterval:0.1
+                                                           target:self
+                                                         selector:@selector(animateNextFrame)
+                                                         userInfo:nil
+                                                          repeats:YES];
+  }
+}
+
+- (void)stopAnimation
+{
+  if (self.animationTimer) {
+    [self.animationTimer invalidate];
+    self.animationTimer = nil;
   }
 }
 
@@ -358,6 +397,95 @@ RCT_NOT_IMPLEMENTED(-(instancetype)initWithFrame : (CGRect)frame)
   }
 }
 
+- (void)loadAndDisplayImageFromSource:(RCTImageSource *)source
+{
+  if (source == nil) {
+    [self cancelAndClearImageLoad];
+    return;
+  }
+
+  // Cancel previous image load request
+  [self cancelImageLoad];
+
+  // Check if the source is a GIF
+  NSString *fileExtension = source.request.URL.pathExtension;
+  BOOL isGif = [fileExtension.lowercaseString isEqualToString:@"gif"];
+  if (isGif) {
+    // Handle GIF loading asynchronously
+    NSURL *imageUrl = source.request.URL;
+
+    // Create an NSURLSessionDataTask to fetch the image data
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithURL:imageUrl completionHandler:^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error) {
+      if (error) {
+        // Handle the error, e.g., log it or report it
+        NSLog(@"Error loading GIF image: %@", error);
+      } else {
+        // Parse the image data and create a UIImage
+        UIImage *gifImage = [UIImage sd_imageWithGIFData:data];
+        
+        // Update the UI on the main thread
+        dispatch_async(dispatch_get_main_queue(), ^{
+          [self imageLoaderLoadedImage:gifImage error:nil forImageSource:source partial:NO];
+          
+          // Start the GIF animation
+          for (UIView *subview in self.subviews) {
+            if ([subview isKindOfClass:[FLAnimatedImageView class]]) {
+              FLAnimatedImageView *animatedImageView = (FLAnimatedImageView *)subview;
+              [animatedImageView startAnimating];
+              break;
+            }
+          }
+        });
+      }
+    }];
+    
+    [task resume];
+  } else {
+    // Handle normal image loading
+    CGSize imageSize = self.bounds.size;
+    CGFloat imageScale = RCTScreenScale();
+    if (!UIEdgeInsetsEqualToEdgeInsets(_capInsets, UIEdgeInsetsZero)) {
+      // Don't resize images that use capInsets
+      imageSize = CGSizeZero;
+      imageScale = source.scale;
+    }
+
+    __weak RCTImageView *weakSelf = self;
+    RCTImageLoaderProgressBlock progressHandler = nil;
+    if (self.onProgress) {
+      RCTDirectEventBlock onProgress = self.onProgress;
+      progressHandler = ^(int64_t loaded, int64_t total) {
+        onProgress(@{
+          @"loaded" : @((double)loaded),
+          @"total" : @((double)total),
+        });
+      };
+    }
+
+    RCTImageURLLoaderRequest *loaderRequest =
+      [_imageLoader loadImageWithURLRequest:source.request
+                                       size:imageSize
+                                      scale:imageScale
+                                    clipped:NO
+                                 resizeMode:_resizeMode
+                                   priority:RCTImageLoaderPriorityImmediate
+                                attribution:{
+                                  .nativeViewTag = [self.reactTag intValue],
+                                  .surfaceId = [self.rootTag intValue],
+                                  .analyticTag = self.internal_analyticTag
+                                }
+                            progressBlock:progressHandler
+                         partialLoadBlock:^(UIImage *image) {
+                           [weakSelf imageLoaderLoadedImage:image error:nil forImageSource:source partial:YES];
+                         }
+                          completionBlock:^(NSError *error, UIImage *loadedImage, id metadata) {
+                            [weakSelf imageLoaderLoadedImage:loadedImage error:error forImageSource:source partial:NO];
+                          }];
+
+    _loaderRequest = loaderRequest;
+  }
+}
+
 - (void)imageLoaderLoadedImage:(UIImage *)loadedImage
                          error:(NSError *)error
                 forImageSource:(RCTImageSource *)source
@@ -398,7 +526,23 @@ RCT_NOT_IMPLEMENTED(-(instancetype)initWithFrame : (CGRect)frame)
       strongSelf->_pendingImageSource = nil;
     }
 
-    strongSelf.image = image;
+    NSString *fileExtension = source.request.URL.pathExtension;
+    BOOL isGif = [fileExtension.lowercaseString isEqualToString:@"gif"];
+    if (isGif) {
+      // Create an FLAnimatedImage from the loaded image data
+      FLAnimatedImage *animatedImage = [FLAnimatedImage animatedImageWithGIFData:UIImagePNGRepresentation(loadedImage)];
+
+      // Create an FLAnimatedImageView to display the GIF
+      FLAnimatedImageView *animatedImageView = [[FLAnimatedImageView alloc] init];
+      animatedImageView.animatedImage = animatedImage;
+
+      // Add the animated image view to the RCTImageView
+      [strongSelf addSubview:animatedImageView];
+      animatedImageView.frame = strongSelf.bounds;
+    } else {
+      // For non-GIF images, set the image as before
+      strongSelf.image = image;
+    }
 
     if (isPartialLoad) {
       if (strongSelf->_onPartialLoad) {
@@ -433,6 +577,8 @@ RCT_NOT_IMPLEMENTED(-(instancetype)initWithFrame : (CGRect)frame)
       setImageBlock(loadedImage);
     });
   }
+  [self loadAndDisplayImageFromSource:source];
+
 }
 
 - (void)reactSetFrame:(CGRect)frame
