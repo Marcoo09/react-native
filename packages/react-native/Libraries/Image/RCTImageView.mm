@@ -413,6 +413,7 @@ RCT_NOT_IMPLEMENTED(-(instancetype)initWithFrame : (CGRect)frame)
   if (isGif) {
     // Handle GIF loading asynchronously
     NSURL *imageUrl = source.request.URL;
+    NSLog(@"Image Url: %@", imageUrl);
 
     // Create an NSURLSessionDataTask to fetch the image data
     NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithURL:imageUrl completionHandler:^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error) {
@@ -529,16 +530,28 @@ RCT_NOT_IMPLEMENTED(-(instancetype)initWithFrame : (CGRect)frame)
     NSString *fileExtension = source.request.URL.pathExtension;
     BOOL isGif = [fileExtension.lowercaseString isEqualToString:@"gif"];
     if (isGif) {
-      // Create an FLAnimatedImage from the loaded image data
-      FLAnimatedImage *animatedImage = [FLAnimatedImage animatedImageWithGIFData:UIImagePNGRepresentation(loadedImage)];
+      // Handle GIF loading
+      NSData *imageData = [NSData dataWithContentsOfURL:source.request.URL];
+      UIImage *originalImage = [UIImage sd_imageWithGIFData:imageData];
 
-      // Create an FLAnimatedImageView to display the GIF
-      FLAnimatedImageView *animatedImageView = [[FLAnimatedImageView alloc] init];
-      animatedImageView.animatedImage = animatedImage;
+      // Apply the blur effect to the image
+      CGFloat blurRadius = 10.0; // Adjust the blur radius as needed
+      UIImage *blurredImage = [self applyBlurEffectToImage:originalImage withRadius:blurRadius];
 
-      // Add the animated image view to the RCTImageView
-      [strongSelf addSubview:animatedImageView];
-      animatedImageView.frame = strongSelf.bounds;
+      // Set the blurred image in a regular UIImageView
+      UIImageView *imageView = [[UIImageView alloc] initWithImage:blurredImage];
+
+      // Add the image view to the RCTImageView
+      [self addSubview:imageView];
+      imageView.frame = self.bounds;
+      // Start the GIF animation
+      for (UIView *subview in self.subviews) {
+          if ([subview isKindOfClass:[FLAnimatedImageView class]]) {
+              FLAnimatedImageView *animatedImageView = (FLAnimatedImageView *)subview;
+              [animatedImageView startAnimating];
+              break;
+          }
+      }
     } else {
       // For non-GIF images, set the image as before
       strongSelf.image = image;
@@ -579,6 +592,22 @@ RCT_NOT_IMPLEMENTED(-(instancetype)initWithFrame : (CGRect)frame)
   }
   [self loadAndDisplayImageFromSource:source];
 
+}
+
+- (UIImage *)applyBlurEffectToImage:(UIImage *)image withRadius:(CGFloat)radius {
+    CIImage *inputImage = [CIImage imageWithCGImage:image.CGImage];
+    CIFilter *filter = [CIFilter filterWithName:@"CIGaussianBlur"];
+    [filter setValue:inputImage forKey:kCIInputImageKey];
+    [filter setValue:@(radius) forKey:kCIInputRadiusKey];
+    CIImage *outputImage = [filter outputImage];
+
+    CIContext *context = [CIContext contextWithOptions:nil];
+    CGImageRef cgImage = [context createCGImage:outputImage fromRect:[outputImage extent]];
+    UIImage *blurredImage = [UIImage imageWithCGImage:cgImage];
+
+    CGImageRelease(cgImage);
+
+    return blurredImage;
 }
 
 - (void)reactSetFrame:(CGRect)frame

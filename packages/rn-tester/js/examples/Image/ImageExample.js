@@ -1313,8 +1313,15 @@ exports.examples = [
     render: function (): React.Node {
       return (
         <Image
-          style={styles.gif}
-          source={require('../../assets/tumblr_mfqekpMktw1rn90umo1_500.gif')}
+          // blurRadius={10}
+          resizeMode={"cover"}
+          style={[styles.gif, {
+            width: "100%",
+            aspectRatio: 1,
+            objectFit: "contain",
+            }
+          ]}
+          source={require('../../assets/ManPc.gif')}
         />
       );
     },
